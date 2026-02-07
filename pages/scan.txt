@@ -324,12 +324,3 @@ Main = App()
 Second = Scan(Main)
 
 Main.mainloop()
-
-quit()
-#make a coroutine function #half done
-#make a copy to "desktop or" button
-#implement "getter" aka searching inside files
-#fold_path_interesting_name
-#          ^^^^^^^^^^^
-
-#self.textbox_scan.insert(index=END, text=file + "\n-line: " +"; ".join((lambda x=data.splitlines(), y=[]: ([y.append(str(index + 1)) if word in obj else None for index, obj in enumerate(x)], *y)[1:])()))
