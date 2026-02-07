@@ -1,0 +1,326 @@
+#~Mercedi 22 octobre 2025 09:41:26
+import _tkinter
+from functools import partial
+from os import path, walk, mkdir, listdir as ls
+from customtkinter import *
+from tkinter import messagebox as message
+from screeninfo import get_monitors as screen_attr
+from asyncio import run, sleep, wait_for, TimeoutError
+from psutil import disk_partitions
+from time import localtime as time, monotonic as mo
+from traceback import format_exc
+
+class App(CTk):
+    def __init__(self):
+        super().__init__()
+        self.screensize = (screen_attr()[0].width, screen_attr()[0].height) #get first screen width and height
+
+        self.title("Scan Application")
+        self.geometry(f"400x300+{self.screensize[0]//2-200}+{self.screensize[1]//2-150}") #middle of the screen
+        self.resizable(False,False)
+
+        self.frame_main = CTkFrame(self, bg_color=self.cget("bg"), fg_color=self.cget("bg"))
+
+        self.label_title = CTkLabel(self.frame_main, text="--SEEK WORDS--", font=CTkFont(size=32))
+        self.entry_match = CTkEntry(self.frame_main, placeholder_text="word to search up")
+        self.button_stop = CTkButton(self.frame_main, text="Stop searching", state="sunken", fg_color="#252525", hover_color="#303030")
+        self.button_copydesk = CTkButton(self.frame_main, text="Copy->Desktop" or "<", font=CTkFont("Aria") or CTkFont("Wingdings"), state="sunken", fg_color="#252525", hover_color="#303030")
+
+        self.frame_main.pack(expand=True, anchor=N, pady=5)
+        self.label_title.grid(column=1, ipadx=30)
+        self.entry_match.grid(row=1, column=1)
+        self.button_stop.grid(row=2, column=1)
+        self.button_copydesk.grid(row=3, column=1)
+
+        self.frame_option = CTkFrame(self, bg_color=self.cget("bg"), fg_color=self.cget("bg"))
+
+        self.checkb_case = CTkCheckBox(self.frame_option, text="Match Case", corner_radius=0, hover_color="gray15", fg_color="gray15")  # respect case
+        self.checkb_infile = CTkCheckBox(self.frame_option, text="Search in singular file", corner_radius=0, hover_color="gray15", fg_color="gray15")  # check in files | or in a singular file
+        self.entry_for_infile = CTkEntry(self.frame_option, placeholder_text="path", width=95, height=8)
+        self.entry_for_infile_word = CTkEntry(self.frame_option, placeholder_text="word", width=60, height=8)
+        self.checkb_dir = CTkCheckBox(self.frame_option, text="search directories", corner_radius=0,hover_color="gray15", fg_color="gray15")
+        self.checkb_file = CTkCheckBox(self.frame_option, text="Search files", corner_radius=0, hover_color="gray15",fg_color="gray15")
+
+        self.frame_option.pack(side="bottom", anchor=W, padx=5, pady=5)
+        self.checkb_case.grid(row=3, sticky=W)
+        self.checkb_infile.grid(row=4, sticky=W)
+        self.checkb_dir.grid(row=5, sticky=W)
+        self.checkb_file.grid(row=6, sticky=W)
+
+        self.checkb_dir.select()
+        self.checkb_file.select()
+
+        self.checkb_file.bind(sequence="<Button-1>", command=(lambda x : self.Always_check()))
+        self.checkb_dir.bind(sequence="<Button-1>", command=(lambda x : self.Always_check()))
+        self.checkb_infile.bind(sequence="<Button-1>", command=(lambda x : self.Always_check2()))
+
+    def Always_check(self):
+        if self.checkb_infile.get() == 0:
+            if self.checkb_dir.get() == 0 and self.checkb_file.get() == 0:
+                self.checkb_file.select()
+        else:
+            self.checkb_file.deselect()
+            self.checkb_dir.deselect()
+
+    def Always_check2(self):
+        if self.checkb_file.get() == 1 or self.checkb_dir.get() == 1:
+            self.checkb_file.deselect()
+            self.checkb_dir.deselect()
+        if self.checkb_case.get() == 1:
+            self.checkb_case.deselect()
+        if self.checkb_infile.get() == 1:
+            self.entry_for_infile.grid(row=4, column=1, sticky=W)
+            self.entry_for_infile_word.grid(row=4, column=2, sticky=W)
+            self.entry_match.bind("<Button-1>", command=self.entry_for_infile.focus_set)
+            self.entry_match.configure(fg_color="red")
+        else:
+            self.entry_for_infile.grid_forget()
+            self.entry_for_infile_word.grid_forget()
+            self.entry_match.unbind(sequence="<Button-1>")
+            self.entry_match.configure(fg_color=self.entry_for_infile.cget("fg_color"))
+
+
+
+class Scan(CTkToplevel):
+
+    def __init__(self, M):
+        super().__init__()
+        self.M = M
+        self.M.entry_match.bind(sequence="<Return>", command=(lambda x : run(self.scan(self.scan_drive))))
+        self.M.entry_for_infile.bind(sequence="<Return>", command=(lambda x : run(self.scan(self.scan_file))))
+        self.M.entry_for_infile_word.bind(sequence="<Return>", command=(lambda x: run(self.scan(self.scan_file))))
+        self.M.button_stop.configure(command=self.raise_warning)
+        self.M.button_copydesk.configure(command=(lambda x=any : run(self.save())))
+        self.Running = False
+        self.Search_Stopped = False
+        self.base_path = "/"
+        self.delay = [mo(), mo()+5]
+
+        self.title("Scan")
+        self.geometry("550x400")
+        self.resizable(True, False)
+        self.withdraw()
+
+        self.textbox_scan = CTkTextbox(self, bg_color=self.cget("fg_color"), fg_color=self.cget("fg_color"), width=2**16, height=self.winfo_height(), activate_scrollbars=True)
+
+        self.textbox_scan.grid()
+
+        self.info_working = message.showinfo
+        self.error_denied = message.showerror
+        self.warning_paths_file = message.showwarning
+
+        self.protocol("WM_DELETE_WINDOW", self.withdraw) #widthdraw the window instead of causing a crashing bug aka destroying error
+        self.M.protocol("WM_DELETE_WINDOW", (lambda : self.shutdown()))
+        self.textbox_scan.bind(sequence="<FocusIn>", command=(lambda x : (self.focus_set()))) #prevent focus on the textbox because I don't want anyone to type in it
+
+    def shutdown(self):
+        self.raise_warning()
+        self.M.quit()
+
+
+    def raise_warning(self):
+        self.delay[-1] = mo()
+        if self.delay[-1]-self.delay[0] > 2:
+            self.delay[0] = self.delay[-1]
+            self.Search_Stopped = True
+
+    def avoid_corouting_error(self):
+        if self.Running == True:
+            self.M.entry_match.unbind(sequence="<Return>")
+            self.M.entry_for_infile.unbind(sequence="<Return>")
+            self.M.entry_for_infile_word.unbind(sequence="<Return>")
+            print("Already Running")
+        else:
+            self.M.entry_match.bind(sequence="<Return>", command=(lambda x: run(self.scan(self.scan_drive))))
+            self.M.entry_for_infile.bind(sequence="<Return>", command=(lambda x: run(self.scan(self.scan_file))))
+            self.M.entry_for_infile_word.bind(sequence="<Return>", command=(lambda x: run(self.scan(self.scan_file))))
+            print("ok")
+
+    def paths(self):
+        try:
+            return [device.__getitem__(0) for device in disk_partitions()]
+        except Exception as e:
+            self.warning_paths_file(title=f"Error encountered: {e}", message=f"Will only search in \"{self.base_path.replace("\n", ", ")}\".")
+            return [self.base_path]
+
+    async def save(self):
+        self.delay[-1] = mo()
+        save_time = time()
+        threshold = 15
+        try:
+            mkdir("scan_saved")
+        except FileExistsError:
+            print("pass")
+            #self.error_denied(title="error encountered!", message=str(e))
+        finally:
+            k = 0
+            if self.delay[-1]-self.delay[0] > 2:
+                while True:
+                    try:
+                        with open(f"scan_saved/{save_time.tm_hour:>2}h{save_time.tm_min:>2}m{save_time.tm_sec:>2}s_{save_time.tm_mday:>2}-{save_time.tm_mon:>2}-{save_time.tm_year}{f" ({k})" if k > 0 else ""}.txt", "x", encoding="utf-8-") as write_save:
+                            await sleep(1)
+                            self.delay[0] = self.delay[-1]
+                            write_save.write(f"search word : {self.word}\n"+self.textbox_scan.get("0.0", END))
+                            break
+                    except FileExistsError:
+                        k+=1
+                        if k > threshold:
+                            self.error_denied(title="error encountered!", message=f"Threshold reached (+{threshold})")
+                            break
+                    except FileNotFoundError:
+                        pass
+
+            else:
+                pass
+
+    def scan_started(self):
+        self.textbox_scan.delete("0.0", END)
+        self.Running = True
+        self.M.button_stop.configure(state="normal", fg_color="#ff7777", hover_color="#ff3333")
+        self.M.button_copydesk.configure(state="sunken", fg_color="#252525")
+        self.title("Scan - Running")
+
+    def scan_stopped(self):
+        self.Running = False
+        self.title("Scan - Stopped")
+        self.M.button_stop.configure(state="sunken", fg_color="#252525", hover_color="#303030")
+        self.M.button_copydesk.configure(state="normal", fg_color="dark green", hover_color="green")
+        print("Stopped")
+
+    def scan_finished(self):
+        self.Running = False
+        self.title("Scan - Finished")
+        self.M.button_stop.configure(state="sunken", fg_color="#252525", hover_color="#303030")
+        self.M.button_copydesk.configure(state="normal", fg_color="dark green", hover_color="green")
+        print("finished")
+
+    async def scan(self, func):
+        self.deiconify()
+        self.avoid_corouting_error()
+        try:
+            if self.Running is False:
+                self.scan_started()
+                try:
+                    await func()
+                except Warning as e:
+                    self.scan_stopped()
+
+                except Exception as e:
+                    self.error_denied(title=f"{e}", message=f"Error handler: {format_exc()}")
+                else:
+                    self.scan_finished()
+                finally:
+                    self.avoid_corouting_error()
+            else:
+                print("Already Running")
+        except _tkinter.TclError:
+            pass
+
+    async def scan_drive(self):
+        paths = self.paths()
+        word = self.M.entry_match.get()
+        self.word = word
+        for drive in paths:
+            if path.exists(drive):
+                try:
+                    for root, dirs, files in walk(drive):  # basically a tree command, return directory and files recursively
+                        searched = dirs + files
+                        for file in searched:
+                            full_path = path.join(root, file).replace("\\", "/")
+                            full_path += "/" if path.isdir(full_path) else ""
+                            if len(word) != 0:
+                                if self.M.checkb_case.get() == 1:
+                                    self.matchUpWord(word, full_path)
+                                elif self.M.checkb_case.get() == 0:
+                                    self.matchUpWord(word.lower(), full_path.lower())
+                            else:
+                                self.textbox_scan.insert(index=END, text=full_path + "\n")
+                            self.update()
+                            if self.Search_Stopped is True:
+                                self.Search_Stopped = False
+                                raise Warning
+                except PermissionError as e:
+                    self.error_denied(title="Access Error", message=f"Error accessing {drive}: {e}")
+
+    async def scan_file(self):
+        path_word = self.M.entry_for_infile.get().replace("\\", "/")
+        word = self.M.entry_for_infile_word.get()
+        if len(path_word) != 0 and len(word) != 0:
+            if path.exists(path_word):
+                if path.isdir(path_word):
+                    _path = path_word  + ("/" if path_word[-1] != "/" else "")
+                    dirs = ls(_path)
+                    for _file in dirs:
+                        true_path = path.join(_path,_file)
+                        if path.isfile(true_path):
+                            try:
+                                data = await wait_for(self.getFiledata(true_path), 4.5)
+                                if self.M.checkb_case.get() == 1:
+                                    if word in data:
+                                        self.textbox_scan.insert(index=END, text=true_path + "\n-line: " +"; ".join((lambda x=data.splitlines(), y=[]: ([y.append(str(index + 1)) if word in obj else None for index, obj in enumerate(x)], *y)[1:])())) # noqa
+                                elif self.M.checkb_case.get() == 0:
+                                    if word.lower() in data.lower():
+                                        self.textbox_scan.insert(index=END, text=true_path + "\n-line: " +"; ".join((lambda x=data.splitlines(), y=[]: ([y.append(str(index + 1)) if word.lower() in obj.lower() else None for index, obj in enumerate(x)], *y)[1:])())) # noqa
+                                if self.Search_Stopped is True:
+                                    self.Search_Stopped = False
+                                    raise Warning
+                            except PermissionError:
+                                pass
+                            except TimeoutError:
+                                pass
+                elif path.isfile(path_word):
+                    true_path = path_word
+                    try:
+                        data = await wait_for(self.getFiledata(true_path), 4.5)
+                        if self.M.checkb_case.get() == 1:
+                            if word in data:
+                                self.textbox_scan.insert(index=END, text=true_path + "\n-line: " +"; ".join((lambda x=data.splitlines(), y=[]: ([y.append(str(index + 1)) if word in obj else None for index, obj in enumerate(x)], *y)[1:])())) # noqa
+                        elif self.M.checkb_case.get() == 0:
+                            if word.lower() in data.lower():
+                                self.textbox_scan.insert(index=END, text=true_path + "\n-line: " +"; ".join((lambda x=data.splitlines(), y=[]: ([y.append(str(index + 1)) if word.lower() in obj.lower() else None for index, obj in enumerate(x)], *y)[1:])())) # noqa
+                        if self.Search_Stopped is True:
+                            self.Search_Stopped = False
+                            raise Warning
+                    except PermissionError:
+                        pass
+                    except TimeoutError:
+                        pass
+
+                else:
+                    self.error_denied(title="Exist but..", message=f"{path_word} is not a directory nor a file")
+            else:
+                self.error_denied(title="Path Doesn't Exist", message=f"{path_word} doesn't exist")
+        else:
+            self.error_denied(title="Empty string", message="Entry is empty")
+
+    def matchUpWord(self, word, full_path):
+            if self.M.checkb_dir.get() == 1 and self.M.checkb_file.get() == 0:
+                if path.isdir(full_path):
+                    seek = full_path[:-1][full_path[:-1].rindex("/")+1:]
+                else:
+                    seek = "|"
+            elif self.M.checkb_dir.get() == 0 and self.M.checkb_file.get() == 1:
+                seek = full_path[full_path.rindex("/"):]
+            else:
+                if path.isdir(full_path):
+                    seek = full_path[:-1][full_path[:-1].rindex("/")+1:]
+                else:
+                    seek = full_path[full_path.rindex("/"):]
+            if word in seek:
+                self.textbox_scan.insert(index=END, text=full_path + "\n")
+
+
+    @staticmethod
+    async def getFiledata(file):
+        for enc in ["UTF-8", "ANSI"]:  # put multiple encoding to read them
+            try:
+                with open(file, "r", encoding=enc) as checked_file:
+                    return checked_file.read(10**9).lower()
+            except UnicodeError:
+                continue
+        return ""
+
+Main = App()
+Second = Scan(Main)
+
+Main.mainloop()
