@@ -6,7 +6,7 @@ document.getElementById("downloadCV").addEventListener("click", function () {
         // Create a temporary <a> element
         const link = document.createElement("a");
         link.href = pdfUrl;
-        link.download = "myfile.pdf"; // Suggested filename for download
+        link.download = "Brianto_Alexandre_CV.pdf"; // Suggested filename for download
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
